@@ -4,36 +4,38 @@
 
 pub mod instruction;
 
+extern crate stm32f1xx_hal as hal;
+
 use core::mem::transmute;
 
 use crate::instruction::Instruction;
-use num_traits::ToPrimitive;
-use num_derive::ToPrimitive;
-
-use embedded_hal::digital::OutputPin;
 use embedded_hal::blocking::spi;
+use embedded_hal::digital::OutputPin;
 use embedded_hal::timer::{CountDown, Periodic};
+use hal::delay::Delay;
+use hal::prelude::*;
 use nb::block;
+use num_derive::ToPrimitive;
+use num_traits::ToPrimitive;
 
-/// ST7735 driver to connect to TFT displays. 
-pub struct ST7735 <SPI, DC, RST, TIMER> 
-where 
+/// ST7735 driver to connect to TFT displays.
+pub struct ST7735<SPI, DC, RST>
+where
     SPI: spi::Write<u8>,
     DC: OutputPin,
     RST: OutputPin,
-    TIMER: CountDown + Periodic,
 {
     /// SPI
-    spi: SPI, 
+    spi: SPI,
 
     /// Data/command pin.
-    dc: DC, 
+    dc: DC,
 
     /// Reset pin.
-    rst: RST, 
+    rst: RST,
 
-    /// 5Hz timer for reset delays
-    timer: TIMER, 
+    /// Delay
+    timer: Delay,
 
     /// Whether the display is RGB (true) or BGR (false)
     rgb: bool,
@@ -51,31 +53,22 @@ pub enum Orientation {
     LandscapeSwapped = 0xA0,
 }
 
-impl<SPI, DC, RST, TIMER> ST7735<SPI, DC, RST, TIMER>
-where 
+impl<SPI, DC, RST> ST7735<SPI, DC, RST>
+where
     SPI: spi::Write<u8>,
     DC: OutputPin,
     RST: OutputPin,
-    TIMER: CountDown + Periodic,
 {
     /// Creates a new driver instance that uses hardware SPI.
-    pub fn new(
-        spi: SPI,
-        dc: DC,
-        rst: RST,
-        timer: TIMER,
-        rgb: bool,
-        inverted: bool,
-    ) -> Self 
+    pub fn new(spi: SPI, dc: DC, rst: RST, timer: Delay, rgb: bool, inverted: bool) -> Self
     where
         SPI: spi::Write<u8>,
         DC: OutputPin,
         RST: OutputPin,
-        TIMER: CountDown + Periodic,
     {
         let display = ST7735 {
             spi,
-            dc, 
+            dc,
             rst,
             timer,
             rgb,
@@ -89,13 +82,17 @@ where
     pub fn init(&mut self) -> Result<(), ()> {
         self.hard_reset();
         self.write_command(Instruction::SWRESET, None)?;
-        block!(self.timer.wait()).map_err(|_|())?;
+        // block!(self.timer.wait()).map_err(|_|())?;
+        self.timer.delay_ms(50u32);
         self.write_command(Instruction::SLPOUT, None)?;
-        block!(self.timer.wait()).map_err(|_|())?;
+        self.timer.delay_ms(50u32);
+        // block!(self.timer.wait()).map_err(|_|())?;
         self.write_command(Instruction::FRMCTR1, Some(&[0x01, 0x2C, 0x2D]))?;
         self.write_command(Instruction::FRMCTR2, Some(&[0x01, 0x2C, 0x2D]))?;
-        self.write_command(Instruction::FRMCTR3,
-            Some(&[0x01, 0x2C, 0x2D, 0x01, 0x2C, 0x2D]))?;
+        self.write_command(
+            Instruction::FRMCTR3,
+            Some(&[0x01, 0x2C, 0x2D, 0x01, 0x2C, 0x2D]),
+        )?;
         self.write_command(Instruction::INVCTR, Some(&[0x07]))?;
         self.write_command(Instruction::PWCTR1, Some(&[0xA2, 0x02, 0x84]))?;
         self.write_command(Instruction::PWCTR2, Some(&[0xC5]))?;
@@ -115,7 +112,8 @@ where
         }
         self.write_command(Instruction::COLMOD, Some(&[0x05]))?;
         self.write_command(Instruction::DISPON, None)?;
-        block!(self.timer.wait()).map_err(|_|())?;
+        self.timer.delay_ms(50u32);
+        // block!(self.timer.wait()).map_err(|_| ())?;
         Ok(())
     }
 
@@ -127,7 +125,9 @@ where
 
     fn write_command(&mut self, command: Instruction, params: Option<&[u8]>) -> Result<(), ()> {
         self.dc.set_low();
-        self.spi.write(&[command.to_u8().unwrap()]).map_err(|_| ())?;
+        self.spi
+            .write(&[command.to_u8().unwrap()])
+            .map_err(|_| ())?;
         if params.is_some() {
             self.write_data(params.unwrap())?;
         }
@@ -149,13 +149,12 @@ where
 
     pub fn set_orientation(&mut self, orientation: &Orientation) -> Result<(), ()> {
         if self.rgb {
-            self.write_command(
-                Instruction::MADCTL, Some(&[orientation.to_u8().unwrap()]
-            ))?;
+            self.write_command(Instruction::MADCTL, Some(&[orientation.to_u8().unwrap()]))?;
         } else {
             self.write_command(
-                Instruction::MADCTL, Some(&[orientation.to_u8().unwrap() | 0x08 ]
-            ))?;
+                Instruction::MADCTL,
+                Some(&[orientation.to_u8().unwrap() | 0x08]),
+            )?;
         }
         Ok(())
     }
@@ -171,15 +170,13 @@ where
         Ok(())
     }
 
-    pub fn set_pixel(&mut self, x: u16, y: u16, color: u16) -> Result <(), ()> {
+    pub fn set_pixel(&mut self, x: u16, y: u16, color: u16) -> Result<(), ()> {
         self.set_address_window(x, y, x, y)?;
         self.write_command(Instruction::RAMWR, None)?;
         self.write_word(color)?;
         Ok(())
     }
-
 }
-
 
 #[cfg(feature = "graphics")]
 extern crate embedded_graphics;
@@ -187,19 +184,19 @@ extern crate embedded_graphics;
 use self::embedded_graphics::{drawable, pixelcolor::PixelColorU16, Drawing};
 
 #[cfg(feature = "graphics")]
-impl<SPI, DC, RST, TIMER> Drawing<PixelColorU16> for ST7735<SPI, DC, RST, TIMER>
+impl<SPI, DC, RST> Drawing<PixelColorU16> for ST7735<SPI, DC, RST>
 where
     SPI: spi::Write<u8>,
     DC: OutputPin,
     RST: OutputPin,
-    TIMER: CountDown + Periodic,
 {
     fn draw<T>(&mut self, item_pixels: T)
     where
         T: Iterator<Item = drawable::Pixel<PixelColorU16>>,
     {
         for pixel in item_pixels {
-            self.set_pixel((pixel.0).0 as u16, (pixel.0).1 as u16, pixel.1.into_inner()).expect("pixel write failed");
+            self.set_pixel((pixel.0).0 as u16, (pixel.0).1 as u16, pixel.1.into_inner())
+                .expect("pixel write failed");
         }
     }
 }
