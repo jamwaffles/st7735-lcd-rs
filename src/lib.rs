@@ -3,16 +3,18 @@
 //! This crate provides a ST7735 driver to connect to TFT displays.
 
 pub mod instruction;
+pub mod instruction_st7789;
 
 extern crate stm32f1xx_hal as hal;
 
 use core::mem::transmute;
 
-use crate::instruction::Instruction;
+use crate::instruction_st7789::InstructionST7789 as Instruction;
 use embedded_hal::blocking::spi;
 use embedded_hal::digital::OutputPin;
 use embedded_hal::timer::{CountDown, Periodic};
 use hal::delay::Delay;
+use hal::gpio::{gpioc::PC13, Output, PushPull};
 use hal::prelude::*;
 use nb::block;
 use num_derive::ToPrimitive;
@@ -42,6 +44,8 @@ where
 
     /// Whether the colours are inverted (true) or not (false)
     inverted: bool,
+
+    led: PC13<Output<PushPull>>,
 }
 
 /// Display orientation.
@@ -60,7 +64,15 @@ where
     RST: OutputPin,
 {
     /// Creates a new driver instance that uses hardware SPI.
-    pub fn new(spi: SPI, dc: DC, rst: RST, timer: Delay, rgb: bool, inverted: bool) -> Self
+    pub fn new(
+        spi: SPI,
+        dc: DC,
+        rst: RST,
+        timer: Delay,
+        rgb: bool,
+        inverted: bool,
+        led: PC13<Output<PushPull>>,
+    ) -> Self
     where
         SPI: spi::Write<u8>,
         DC: OutputPin,
@@ -73,6 +85,7 @@ where
             timer,
             rgb,
             inverted,
+            led,
         };
 
         display
@@ -80,40 +93,59 @@ where
 
     /// Runs commands to initialize the display.
     pub fn init(&mut self) -> Result<(), ()> {
+        self.led.set_low();
         self.hard_reset();
         self.write_command(Instruction::SWRESET, None)?;
         // block!(self.timer.wait()).map_err(|_|())?;
-        self.timer.delay_ms(50u32);
+        self.timer.delay_ms(150u32);
         self.write_command(Instruction::SLPOUT, None)?;
-        self.timer.delay_ms(50u32);
-        // block!(self.timer.wait()).map_err(|_|())?;
-        self.write_command(Instruction::FRMCTR1, Some(&[0x01, 0x2C, 0x2D]))?;
-        self.write_command(Instruction::FRMCTR2, Some(&[0x01, 0x2C, 0x2D]))?;
+        self.timer.delay_ms(500u32);
+        self.write_command(Instruction::COLMOD, Some(&[0x55]))?;
+        self.timer.delay_ms(10u32);
+        self.write_command(Instruction::MADCTL, Some(&[0x08]))?;
         self.write_command(
-            Instruction::FRMCTR3,
-            Some(&[0x01, 0x2C, 0x2D, 0x01, 0x2C, 0x2D]),
+            Instruction::CASET,
+            Some(&[0, 0, (240 + 0) >> 8, (240 + 0) & 0xff]),
         )?;
-        self.write_command(Instruction::INVCTR, Some(&[0x07]))?;
-        self.write_command(Instruction::PWCTR1, Some(&[0xA2, 0x02, 0x84]))?;
-        self.write_command(Instruction::PWCTR2, Some(&[0xC5]))?;
-        self.write_command(Instruction::PWCTR3, Some(&[0x0A, 0x00]))?;
-        self.write_command(Instruction::PWCTR4, Some(&[0x8A, 0x2A]))?;
-        self.write_command(Instruction::PWCTR5, Some(&[0x8A, 0xEE]))?;
-        self.write_command(Instruction::VMCTR1, Some(&[0x0E]))?;
-        if self.inverted {
-            self.write_command(Instruction::INVON, None)?;
-        } else {
-            self.write_command(Instruction::INVOFF, None)?;
-        }
-        if self.rgb {
-            self.write_command(Instruction::MADCTL, Some(&[0x00]))?;
-        } else {
-            self.write_command(Instruction::MADCTL, Some(&[0x08]))?;
-        }
-        self.write_command(Instruction::COLMOD, Some(&[0x05]))?;
+        self.write_command(
+            Instruction::RASET,
+            Some(&[0, 0, (240 + 80) >> 8, (240 + 80) & 0xff]),
+        )?;
+        self.write_command(Instruction::INVON, None)?;
+        self.timer.delay_ms(10u32);
+        self.write_command(Instruction::NORON, None)?;
+        self.timer.delay_ms(10u32);
         self.write_command(Instruction::DISPON, None)?;
-        self.timer.delay_ms(50u32);
-        // block!(self.timer.wait()).map_err(|_| ())?;
+        self.timer.delay_ms(500u32);
+        self.led.set_high();
+        // block!(self.timer.wait()).map_err(|_|())?;
+        // self.write_command(Instruction::FRMCTR1, Some(&[0x01, 0x2C, 0x2D]))?;
+        // self.write_command(Instruction::FRMCTR2, Some(&[0x01, 0x2C, 0x2D]))?;
+        // self.write_command(
+        //     Instruction::FRMCTR3,
+        //     Some(&[0x01, 0x2C, 0x2D, 0x01, 0x2C, 0x2D]),
+        // )?;
+        // self.write_command(Instruction::INVCTR, Some(&[0x07]))?;
+        // self.write_command(Instruction::PWCTR1, Some(&[0xA2, 0x02, 0x84]))?;
+        // self.write_command(Instruction::PWCTR2, Some(&[0xC5]))?;
+        // self.write_command(Instruction::PWCTR3, Some(&[0x0A, 0x00]))?;
+        // self.write_command(Instruction::PWCTR4, Some(&[0x8A, 0x2A]))?;
+        // self.write_command(Instruction::PWCTR5, Some(&[0x8A, 0xEE]))?;
+        // self.write_command(Instruction::VMCTR1, Some(&[0x0E]))?;
+        // if self.inverted {
+        //     self.write_command(Instruction::INVON, None)?;
+        // } else {
+        //     self.write_command(Instruction::INVOFF, None)?;
+        // }
+        // if self.rgb {
+        //     self.write_command(Instruction::MADCTL, Some(&[0x00]))?;
+        // } else {
+        //     self.write_command(Instruction::MADCTL, Some(&[0x08]))?;
+        // }
+        // self.write_command(Instruction::COLMOD, Some(&[0x05]))?;
+        // self.write_command(Instruction::DISPON, None)?;
+        // self.timer.delay_ms(50u32);
+        // // block!(self.timer.wait()).map_err(|_| ())?;
         Ok(())
     }
 

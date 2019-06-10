@@ -31,6 +31,9 @@ fn main() -> ! {
 
     let mut gpioa = dp.GPIOA.split(&mut rcc.apb2);
     let mut gpiob = dp.GPIOB.split(&mut rcc.apb2);
+    let mut gpioc = dp.GPIOC.split(&mut rcc.apb2);
+
+    let mut led = gpioc.pc13.into_push_pull_output(&mut gpioc.crh);
 
     // SPI1
     let sck = gpioa.pa5.into_alternate_push_pull(&mut gpioa.crl);
@@ -48,14 +51,15 @@ fn main() -> ! {
             polarity: Polarity::IdleLow,
             phase: Phase::CaptureOnFirstTransition,
         },
-        8.mhz(),
+        1.mhz(),
         clocks,
         &mut rcc.apb2,
     );
 
     let mut delay = Delay::new(cp.SYST, clocks);
 
-    let mut disp = st7735_lcd::ST7735::new(spi, dc, rst, delay);
+    let mut disp = st7735_lcd::ST7735::new(spi, dc, rst, delay, true, false, led);
+    // disp.hard_reset();
     disp.init().unwrap();
     disp.set_orientation(&Orientation::Landscape).unwrap();
 
